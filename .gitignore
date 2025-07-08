@@ -1,0 +1,27 @@
+# Окружение
+venv/
+.env
+
+# Кеши Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Логи
+*.log
+
+# IDE/редакторы
+.vscode/
+.idea/
+*.swp
+
+# ОС
+.DS_Store
+Thumbs.db
+
+# Тестовые базы данных и временные файлы
+*.sqlite3
+*.db
+*.tmp
+
+
