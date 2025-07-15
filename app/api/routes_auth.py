@@ -1,36 +1,26 @@
-from fastapi import APIRouter, HTTPException, status, Body, Query
-from typing import List
-from pydantic import BaseModel
-from app.models.user import UserRegister, UserLogin
+from fastapi import APIRouter, Depends, HTTPException, Query, Body
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.models.user import UserRegister, UserLogin, ProgressUpdate
 from app.services.auth_service import register_user, login_user, get_user_profile, update_user_progress
+from app.db.database import get_async_session
 
 router = APIRouter()
 
-class ProgressUpdate(BaseModel):
-    course_slug: str
-    completed_lessons: List[int]
-
 @router.post("/register")
-async def register(user: UserRegister):
-    return register_user(user)
+async def register(user: UserRegister, session: AsyncSession = Depends(get_async_session)):
+    return await register_user(user, session)
 
 @router.post("/login")
-async def login(user: UserLogin):
-    return login_user(user)
+async def login(user: UserLogin, session: AsyncSession = Depends(get_async_session)):
+    return await login_user(user, session)
 
 @router.get("/profile")
-async def get_profile(token: str = Query(...)):
-    return get_user_profile(token)
+async def profile(token: str = Query(...), session: AsyncSession = Depends(get_async_session)):
+    return await get_user_profile(token, session)
 
 @router.post("/progress")
-async def update_progress(
-    token: str = Query(...),
-    progress_data: ProgressUpdate = Body(...)
-):
-    """
-    Обновление прогресса пользователя по курсу.
-    """
-    return update_user_progress(token, progress_data.course_slug, progress_data.completed_lessons)
+async def progress(token: str = Query(...), progress_data: ProgressUpdate = Body(...), session: AsyncSession = Depends(get_async_session)):
+    return await update_user_progress(token, progress_data.course_slug, progress_data.completed_lessons, session)
 
 @router.get("/debug")
 async def debug():

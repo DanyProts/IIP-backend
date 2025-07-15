@@ -1,258 +1,218 @@
-import traceback
-from fastapi import HTTPException, status
+from sqlalchemy import select, func
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.db.models import User, Course, UserCourseEnrollment, UserCourseProgress, UserActivityLog, CourseContent, CourseModule
 from app.models.user import UserRegister, UserLogin
+from fastapi import HTTPException, status
 from passlib.context import CryptContext
-import psycopg2
-from psycopg2.extras import RealDictCursor
-import logging
-from typing import Dict, Any, List
-from app.db.db_config import host, user, db_name, password
-import logging
+from app.models.security import create_access_token, verify_access_token
+from sqlalchemy.exc import IntegrityError
+from typing import List, Dict, Any
+from datetime import datetime
 
-logging.basicConfig(level=logging.INFO)
-
-logger = logging.getLogger(__name__)
-
-logging.basicConfig(level=logging.INFO)
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-def get_db_connection():
-    return psycopg2.connect(
-        host=host,
-        database=db_name,
-        user=user,
-        password=password,
-        cursor_factory=RealDictCursor
+
+async def get_user_by_email(session: AsyncSession, email: str) -> User | None:
+    result = await session.execute(select(User).filter(User.email == email))
+    return result.scalars().first()
+
+
+async def register_user(user: UserRegister, session: AsyncSession) -> Dict[str, Any]:
+    existing_user = await get_user_by_email(session, user.email)
+    if existing_user:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
+
+    hashed_password = pwd_context.hash(user.password)
+    db_user = User(
+        email=user.email,
+        name=user.name,
+        password_hash=hashed_password,
+        join_date=datetime.utcnow(),
     )
-
-def register_user(user: UserRegister) -> Dict[str, Any]:
-    conn = None
-    cur = None
+    session.add(db_user)
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
+        await session.commit()
+        await session.refresh(db_user)
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Could not register user")
 
-        cur.execute("SELECT email FROM users WHERE email = %s", (user.email,))
-        if cur.fetchone():
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Email already registered"
-            )
+    access_token = create_access_token({"sub": db_user.email})
 
-        hashed_password = pwd_context.hash(user.password)
-        full_name = f"{user.firstName} {user.lastName}"
-
-        cur.execute("""
-            INSERT INTO users (email, password_hash, name, join_date)
-            VALUES (%s, %s, %s, NOW())
-            RETURNING id, email, name
-        """, (user.email, hashed_password, full_name))
-
-        new_user = cur.fetchone()
-        conn.commit()
-
-        logger.info(f"User registered: {user.email}")
-        return {
-            "status": "success",
-            "message": "Registration successful",
-            "user": {
-                "id": new_user["id"],
-                "email": new_user["email"],
-                "name": new_user["name"]
-            }
+    return {
+        "status": "success",
+        "message": "Registration successful",
+        "token": access_token,
+        "user": {
+            "id": db_user.id,
+            "email": db_user.email,
+            "name": db_user.name
         }
+    }
 
-    except Exception as e:
-        logger.error(f"Registration error: {str(e)}\n{traceback.format_exc()}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Registration failed"
-        )
-    finally:
-        if cur:
-            cur.close()
-        if conn:
-            conn.close()
 
-def login_user(user: UserLogin) -> Dict[str, Any]:
-    conn = None
-    cur = None
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
+async def login_user(user: UserLogin, session: AsyncSession) -> Dict[str, Any]:
+    db_user = await get_user_by_email(session, user.email)
+    if not db_user or not pwd_context.verify(user.password, db_user.password_hash):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
 
-        cur.execute("""
-            SELECT id, email, password_hash, name 
-            FROM users WHERE email = %s
-        """, (user.email,))
-        
-        db_user = cur.fetchone()
+    # Обновляем время последнего визита
+    db_user.last_visit = datetime.utcnow()
+    await session.commit()
 
-        if not db_user or not pwd_context.verify(user.password, db_user["password_hash"]):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid email or password"
-            )
+    access_token = create_access_token({"sub": db_user.email})
 
-        token = db_user["email"]  # Можно заменить на JWT в будущем
-
-        cur.execute("""
-            UPDATE users SET last_visit = NOW() 
-            WHERE id = %s
-        """, (db_user["id"],))
-        conn.commit()
-
-        return {
-            "status": "success",
-            "token": token,
-            "user": {
-                "email": db_user["email"],
-                "name": db_user["name"]
-            }
+    return {
+        "status": "success",
+        "token": access_token,
+        "user": {
+            "id": db_user.id,
+            "email": db_user.email,
+            "name": db_user.name
         }
+    }
 
-    except Exception as e:
-        logger.error(f"Login error: {str(e)}\n{traceback.format_exc()}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Login failed"
+
+async def get_user_profile(token: str, session: AsyncSession) -> Dict[str, Any]:
+    email = verify_access_token(token)
+    if email is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
+    db_user = await get_user_by_email(session, email)
+    if not db_user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Получаем прогресс пользователя для агрегации статистики
+    result_progress = await session.execute(
+        select(UserCourseProgress).filter(UserCourseProgress.user_id == db_user.id)
+    )
+    user_progress_list = result_progress.scalars().all()
+
+    # Получаем курсы, на которые подписан пользователь, вместе с прогрессом
+    result = await session.execute(
+        select(
+            Course, UserCourseProgress
         )
-    finally:
-        if cur:
-            cur.close()
-        if conn:
-            conn.close()
-
-def get_user_profile(token: str) -> Dict[str, Any]:
-    conn = None
-    cur = None
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        cur.execute("SELECT * FROM users WHERE email = %s", (token,))
-        user = cur.fetchone()
-
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
-
-        cur.execute("""
-            SELECT c.*, p.progress_percent, p.completed_lessons, p.last_activity
-            FROM user_course_enrollment e
-            JOIN courses c ON c.id = e.course_id
-            LEFT JOIN user_course_progress p ON p.user_id = e.user_id AND p.course_id = e.course_id
-            WHERE e.user_id = %s
-        """, (user["id"],))
-        courses = cur.fetchall()
-
-        cur.execute("""
-            SELECT TO_CHAR(timestamp, 'YYYY-MM-DD') as day, action 
-            FROM user_activity_log WHERE user_id = %s
-        """, (user["id"],))
-        rows = cur.fetchall()
-
-        activity = {}
-        for row in rows:
-            if row["day"] not in activity:
-                activity[row["day"]] = {"count": 0, "details": []}
-            activity[row["day"]]["count"] += 1
-            activity[row["day"]]["details"].append(row["action"])
-
-        enrolled_courses = []
-        for c in courses:
-            comp_lessons_raw = c.get("completed_lessons")
-            if comp_lessons_raw is None:
-               comp_lessons_array = []
-            else:
-               comp_lessons_array = comp_lessons_raw  # psycopg2 преобразует массив в Python list
-    
-            enrolled_courses.append({
-                "slug": c["slug"],
-                "progress": float(c.get("progress_percent") or 0),
-                "completedLessons": comp_lessons_array,
-                "lastActivity": c.get("last_activity").strftime("%Y-%m-%d") if c.get("last_activity") else ""
-            })
-        return {
-            "id": user["id"],
-            "name": user["name"],
-            "email": user["email"],
-            "joinDate": user["join_date"].strftime("%d.%m.%Y") if user["join_date"] else "",
-            "lastVisit": user["last_visit"].strftime("%d.%m.%Y %H:%M") if user["last_visit"] else "",
-            "stats": {
-                "totalTime": f"{user.get('total_time_minutes', 0)} минут",
-                "streak": user.get("streak_days", 0),
-                "completedTasks": user.get("completed_lessons", 0)
-            },
-            "enrolledCourses": enrolled_courses,
-            "activity": activity
-        }
-    finally:
-        if cur:
-            cur.close()
-        if conn:
-            conn.close()
-
-def update_user_progress(token: str, course_slug: str, completed_lessons: List[int]) -> Dict[str, Any]:
-    logger.info(f"update_user_progress called with token={token}, course_slug={course_slug}, completed_lessons={completed_lessons}")
-    conn = None
-    cur = None
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        cur.execute("SELECT id FROM users WHERE email = %s", (token,))
-        user = cur.fetchone()
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
-        user_id = user["id"]
-
-        cur.execute("SELECT id FROM courses WHERE slug = %s", (course_slug,))
-        course = cur.fetchone()
-        if not course:
-            raise HTTPException(status_code=404, detail="Course not found")
-        course_id = course["id"]
-
-        cur.execute("""
-            SELECT COUNT(DISTINCT cc.id) AS count 
-            FROM course_content cc
-            JOIN course_modules cm ON cc.module_id = cm.id
-            WHERE cm.course_id = %s
-        """, (course_id,))
-        module_count = cur.fetchone()["count"]
-        if module_count == 0:
-            module_count = 1
-        progress_percent = round(len(completed_lessons) / module_count * 100, 2)
-
-        cur.execute("""
-            INSERT INTO user_course_progress (user_id, course_id, progress_percent, completed_lessons, last_activity)
-            VALUES (%s, %s, %s, %s, NOW())
-            ON CONFLICT (user_id, course_id) DO UPDATE SET
-                progress_percent = EXCLUDED.progress_percent,
-                completed_lessons = EXCLUDED.completed_lessons,
-                last_activity = EXCLUDED.last_activity
-        """, (user_id, course_id, progress_percent, completed_lessons))
-
-        cur.execute("""
-            INSERT INTO user_activity_log (user_id, action, related_object_type, related_object_id, timestamp)
-            VALUES (%s, %s, %s, %s, NOW())
-        """, (
-            user_id,
-            f"Обновлен прогресс в курсе '{course_slug}': завершено уроков {len(completed_lessons)}",
-            "course_progress",
-            course_id
-        ))
-
-        conn.commit()
-        return {"status": "success", "progress_percent": progress_percent}
-
-    except Exception as e:
-        logger.error(f"Update progress error: {e}\n{traceback.format_exc()}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to update progress"
+        .join(UserCourseEnrollment, (UserCourseEnrollment.course_id == Course.id))
+        .outerjoin(
+            UserCourseProgress,
+            (UserCourseProgress.course_id == Course.id) & (UserCourseProgress.user_id == db_user.id)
         )
-    finally:
-        if cur:
-            cur.close()
-        if conn:
-            conn.close()
+        .filter(UserCourseEnrollment.user_id == db_user.id)
+    )
+    courses_progress = result.all()
+
+    enrolled_courses = []
+    for course, progress in courses_progress:
+        completed_lessons = progress.completed_lessons if progress and progress.completed_lessons else []
+        enrolled_courses.append({
+            "slug": course.slug,
+            "progress": float(progress.progress_percent) if progress else 0.0,
+            "completedLessons": completed_lessons,
+            "lastActivity": progress.last_activity.strftime("%Y-%m-%d") if progress and progress.last_activity else ""
+        })
+
+    # Активность пользователя
+    result_activity = await session.execute(
+        select(UserActivityLog).filter(UserActivityLog.user_id == db_user.id)
+    )
+    activity_logs = result_activity.scalars().all()
+
+    activity = {}
+    for log in activity_logs:
+        day = log.timestamp.strftime("%Y-%m-%d")
+        if day not in activity:
+            activity[day] = {"count": 0, "details": []}
+        activity[day]["count"] += 1
+        activity[day]["details"].append(log.action)
+
+    # Агрегация статистики из user_progress_list
+    total_time = 0
+    max_streak = 0
+    completed_tasks = 0
+    for progress in user_progress_list:
+        if progress.total_time_minutes:
+            total_time += progress.total_time_minutes
+        if progress.streak_days and progress.streak_days > max_streak:
+            max_streak = progress.streak_days
+        if progress.completed_lessons:
+            completed_tasks += len(progress.completed_lessons)
+
+    profile = {
+        "id": db_user.id,
+        "name": db_user.name,
+        "email": db_user.email,
+        "joinDate": db_user.join_date.strftime("%d.%m.%Y") if db_user.join_date else "",
+        "lastVisit": db_user.last_visit.strftime("%d.%m.%Y %H:%M") if db_user.last_visit else "",
+        "stats": {
+            "totalTime": f"{total_time} минут",
+            "streak": max_streak,
+            "completedTasks": completed_tasks
+        },
+        "enrolledCourses": enrolled_courses,
+        "activity": activity,
+    }
+
+    return profile
+
+
+async def update_user_progress(token: str, course_slug: str, completed_lessons: List[int], session: AsyncSession) -> Dict[str, Any]:
+    email = verify_access_token(token)
+    if email is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
+    db_user = await get_user_by_email(session, email)
+    if not db_user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    result_course = await session.execute(select(Course).filter(Course.slug == course_slug))
+    db_course = result_course.scalars().first()
+    if not db_course:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    # Получаем общее количество уроков через связные таблицы course_modules и course_content
+    result_count = await session.execute(
+        select(func.count())
+        .select_from(CourseContent)
+        .join(CourseModule, CourseContent.module_id == CourseModule.id)
+        .filter(CourseModule.course_id == db_course.id)
+    )
+    total_lessons_count = result_count.scalar_one_or_none() or 1
+
+    # Получаем прогресс пользователя для курса
+    result_progress = await session.execute(
+        select(UserCourseProgress)
+        .filter(UserCourseProgress.user_id == db_user.id, UserCourseProgress.course_id == db_course.id)
+    )
+    user_progress = result_progress.scalars().first()
+
+    progress_percent = round(len(completed_lessons) / total_lessons_count * 100, 2)
+    now = datetime.utcnow()
+
+    if not user_progress:
+        user_progress = UserCourseProgress(
+            user_id=db_user.id,
+            course_id=db_course.id,
+            progress_percent=progress_percent,
+            last_activity=now,
+            completed_lessons=completed_lessons
+        )
+        session.add(user_progress)
+    else:
+        user_progress.completed_lessons = completed_lessons
+        user_progress.progress_percent = progress_percent
+        user_progress.last_activity = now
+
+    # Логируем активность пользователя
+    activity = UserActivityLog(
+        user_id=db_user.id,
+        action=f"Обновлен прогресс в курсе '{course_slug}': завершено уроков {len(completed_lessons)}",
+        related_object_type="course_progress",
+        related_object_id=db_course.id,
+        timestamp=now
+    )
+    session.add(activity)
+
+    await session.commit()
+
+    return {"status": "success", "progress_percent": progress_percent}
