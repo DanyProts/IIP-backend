@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+SQLAlchemy
+psycopg2-binary
+PyJWT
+requests
+aiokafka==0.8.1
