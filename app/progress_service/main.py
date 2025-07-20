@@ -3,7 +3,8 @@ from .api import routes_progress
 
 app = FastAPI(title="Progress Service")
 
-app.include_router(routes_progress.router, prefix="/progress")
+app.include_router(routes_progress.router, prefix="/api/progress")
+
 
 if __name__ == "__main__":
     import uvicorn

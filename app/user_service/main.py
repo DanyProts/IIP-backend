@@ -4,16 +4,14 @@ from .api import routes_auth
 
 app = FastAPI(title="User Service")
 
-# CORS — если фронт делает запросы
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # можно указать конкретный фронт
+    allow_origins=["*"],  # можно ограничить на проде
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# подключаем маршруты с /api/auth
 app.include_router(routes_auth.router, prefix="/api/auth")
 
 if __name__ == "__main__":

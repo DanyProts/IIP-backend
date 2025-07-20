@@ -3,26 +3,41 @@ import httpx
 
 router = APIRouter()
 
-# Base URLs of microservices
 USER_SERVICE_URL = "http://localhost:8001"
 COURSE_SERVICE_URL = "http://localhost:8002"
 PROGRESS_SERVICE_URL = "http://localhost:8003"
 ACTIVITY_SERVICE_URL = "http://localhost:8004"
 
 async def _forward_async(method: str, url: str, request: Request) -> Response:
-    """Forward request to internal microservice using httpx (async)"""
     headers = {}
-    if "authorization" in request.headers:
-        headers["authorization"] = request.headers["authorization"]
+    auth_header = request.headers.get("authorization")
+    if auth_header:
+        headers["authorization"] = auth_header
+
     try:
         async with httpx.AsyncClient() as client:
             if method == "GET":
                 resp = await client.get(url, headers=headers, params=request.query_params)
             elif method == "POST":
-                body = await request.json()
+                try:
+                    body = await request.json()
+                except Exception:
+                    body = None
                 resp = await client.post(url, headers=headers, json=body)
+            elif method == "PUT":
+                try:
+                    body = await request.json()
+                except Exception:
+                    body = None
+                resp = await client.put(url, headers=headers, json=body)
+            elif method == "DELETE":
+                resp = await client.delete(url, headers=headers, params=request.query_params)
             else:
-                resp = await client.request(method, url, headers=headers)
+                try:
+                    body = await request.json()
+                except Exception:
+                    body = None
+                resp = await client.request(method, url, headers=headers, json=body, params=request.query_params)
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Microservice unreachable: {str(e)}")
 
@@ -32,80 +47,78 @@ async def _forward_async(method: str, url: str, request: Request) -> Response:
         media_type=resp.headers.get("content-type", "application/json")
     )
 
-# ==== Auth ====
+# === Auth ===
 @router.post("/auth/login")
 async def login_route(request: Request):
-    return await _forward_async("POST", f"{USER_SERVICE_URL}/auth/login", request)
+    return await _forward_async("POST", f"{USER_SERVICE_URL}/api/auth/login", request)
 
 @router.post("/auth/register")
 async def register_route(request: Request):
-    return await _forward_async("POST", f"{USER_SERVICE_URL}/auth/register", request)
+    return await _forward_async("POST", f"{USER_SERVICE_URL}/api/auth/register", request)
 
 @router.get("/auth/users/me")
 async def me_route(request: Request):
-    # Пробрасываем на правильный путь User Service: /users/me, а не /auth/users/me
-    return await _forward_async("GET", f"{USER_SERVICE_URL}/users/me", request)
+    return await _forward_async("GET", f"{USER_SERVICE_URL}/api/auth/users/me", request)
 
 # ==== Courses ====
 @router.get("/courses")
 async def list_courses(request: Request):
-    return await _forward_async("GET", f"{COURSE_SERVICE_URL}/courses", request)
+    return await _forward_async("GET", f"{COURSE_SERVICE_URL}/api/courses", request)
 
 @router.get("/courses/{course_id}")
 async def get_course(course_id: str, request: Request):
-    return await _forward_async("GET", f"{COURSE_SERVICE_URL}/courses/{course_id}", request)
+    return await _forward_async("GET", f"{COURSE_SERVICE_URL}/api/courses/{course_id}", request)
 
 @router.post("/courses")
 async def create_course(request: Request):
-    return await _forward_async("POST", f"{COURSE_SERVICE_URL}/courses", request)
+    return await _forward_async("POST", f"{COURSE_SERVICE_URL}/api/courses", request)
 
 # ==== Progress ====
 @router.post("/progress/enroll")
 async def enroll_course(request: Request):
-    return await _forward_async("POST", f"{PROGRESS_SERVICE_URL}/progress/enroll", request)
+    return await _forward_async("POST", f"{PROGRESS_SERVICE_URL}/api/progress/enroll", request)
 
 @router.get("/progress/my-courses")
 async def my_courses(request: Request):
-    return await _forward_async("GET", f"{PROGRESS_SERVICE_URL}/progress/my-courses", request)
+    return await _forward_async("GET", f"{PROGRESS_SERVICE_URL}/api/progress/my-courses", request)
 
 @router.post("/progress/complete-lesson")
 async def complete_lesson(request: Request):
-    return await _forward_async("POST", f"{PROGRESS_SERVICE_URL}/progress/complete-lesson", request)
+    return await _forward_async("POST", f"{PROGRESS_SERVICE_URL}/api/progress/complete-lesson", request)
 
 @router.post("/progress/update")
 async def update_progress(request: Request):
-    return await _forward_async("POST", f"{PROGRESS_SERVICE_URL}/progress/update", request)
+    return await _forward_async("POST", f"{PROGRESS_SERVICE_URL}/api/progress/update", request)
 
 # ==== Activity ====
 @router.get("/questions")
 async def get_questions(request: Request):
-    return await _forward_async("GET", f"{ACTIVITY_SERVICE_URL}/questions", request)
+    return await _forward_async("GET", f"{ACTIVITY_SERVICE_URL}/api/questions", request)
 
 @router.get("/questions/{question_id}")
 async def get_question(question_id: int, request: Request):
-    return await _forward_async("GET", f"{ACTIVITY_SERVICE_URL}/questions/{question_id}", request)
+    return await _forward_async("GET", f"{ACTIVITY_SERVICE_URL}/api/questions/{question_id}", request)
 
 @router.post("/questions")
 async def post_question(request: Request):
-    return await _forward_async("POST", f"{ACTIVITY_SERVICE_URL}/questions", request)
+    return await _forward_async("POST", f"{ACTIVITY_SERVICE_URL}/api/questions", request)
 
 @router.post("/questions/{question_id}/answers")
 async def answer_question(question_id: int, request: Request):
-    return await _forward_async("POST", f"{ACTIVITY_SERVICE_URL}/questions/{question_id}/answers", request)
+    return await _forward_async("POST", f"{ACTIVITY_SERVICE_URL}/api/questions/{question_id}/answers", request)
 
 @router.post("/answers/{answer_id}/vote")
 async def vote_answer(answer_id: int, request: Request):
-    return await _forward_async("POST", f"{ACTIVITY_SERVICE_URL}/answers/{answer_id}/vote", request)
+    return await _forward_async("POST", f"{ACTIVITY_SERVICE_URL}/api/answers/{answer_id}/vote", request)
 
 @router.get("/activity/logs")
 async def get_logs(request: Request):
-    return await _forward_async("GET", f"{ACTIVITY_SERVICE_URL}/activity/logs", request)
+    return await _forward_async("GET", f"{ACTIVITY_SERVICE_URL}/api/activity/logs", request)
 
 @router.post("/activity/logs")
 async def create_log(request: Request):
-    return await _forward_async("POST", f"{ACTIVITY_SERVICE_URL}/activity/logs", request)
+    return await _forward_async("POST", f"{ACTIVITY_SERVICE_URL}/api/activity/logs", request)
 
 @router.post("/assignments/{assignment_id}/submit")
 async def submit_assignment(assignment_id: int, request: Request):
-    return await _forward_async("POST", f"{PROGRESS_SERVICE_URL}/progress/assignments/{assignment_id}/submit", request)
-    
+    return await _forward_async("POST", f"{PROGRESS_SERVICE_URL}/api/progress/assignments/{assignment_id}/submit", request)

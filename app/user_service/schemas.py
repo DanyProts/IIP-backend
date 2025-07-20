@@ -1,13 +1,17 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from typing import Optional
 from datetime import datetime
 
 class UserBase(BaseModel):
     name: str
-    email: str
+    email: EmailStr
 
 class UserCreate(UserBase):
     password: str  # plaintext password for registration
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
 
 class UserOut(UserBase):
     id: int
@@ -17,7 +21,7 @@ class UserOut(UserBase):
     last_visit: Optional[datetime] = None
 
     class Config:
-        orm_mode = True  # Allows ORM model instances to be converted to this schema
+        from_attributes = True  # Pydantic v2; если v1 — заменить на orm_mode = True
 
 class Token(BaseModel):
     access_token: str
