@@ -131,40 +131,42 @@ async def get_course_progress(course_id: int, request: Request, db: AsyncSession
 
 @router.post("/complete-lesson")
 async def complete_lesson(data: schemas.LessonCompleteRequest, request: Request, db: AsyncSession = Depends(db.get_db)):
+    logger.info(f"Received complete_lesson request with data: {data}")
     try:
         payload = await _get_token_payload(request.headers.get("authorization"))
         user_id = payload.get("user_id")
         course_id = data.course_id
         content_id = data.content_id
-        logger.info(f"User {user_id} completing lesson {content_id} in course {course_id}")
 
+        # Проверка записи пользователя на курс
         result = await db.execute(select(models.UserCourseEnrollment).filter_by(user_id=user_id, course_id=course_id))
         enrollment = result.scalars().first()
         if not enrollment:
-            logger.warning(f"User {user_id} is not enrolled in course {course_id}")
             raise HTTPException(status_code=403, detail="User is not enrolled in this course")
 
+        # Проверка урока и курса через микросервис
         async with httpx.AsyncClient() as client:
             res = await client.get(f"{COURSE_SERVICE_URL}/content/{content_id}")
             if res.status_code == 404:
-                logger.warning(f"Content {content_id} not found in course service")
                 raise HTTPException(status_code=404, detail="Content not found")
             content_info = res.json()
 
-        actual_course = content_info.get("course_id")
-        if actual_course != course_id:
-            logger.warning(f"Content {content_id} does not belong to course {course_id} (belongs to {actual_course})")
+        if content_info.get("course_id") != course_id:
             raise HTTPException(status_code=400, detail="Content does not belong to the specified course")
 
+        # Проверка, завершён ли урок
         result = await db.execute(select(models.LessonCompletion).filter_by(user_id=user_id, content_id=content_id))
         existing = result.scalars().first()
+
         if existing:
-            logger.warning(f"User {user_id} already completed lesson {content_id}")
-            raise HTTPException(status_code=400, detail="Lesson already marked as completed")
+            # Удаляем старую отметку, чтобы можно было повторно завершить урок
+            db.delete(existing)
+            await db.flush()  # применяем удаление перед созданием новой записи
 
         completion = models.LessonCompletion(user_id=user_id, content_id=content_id, completed_at=datetime.utcnow())
         db.add(completion)
 
+        # Обновление прогресса
         result = await db.execute(select(models.UserCourseProgress).filter_by(user_id=user_id, course_id=course_id))
         progress = result.scalars().first()
         if not progress:
@@ -180,67 +182,41 @@ async def complete_lesson(data: schemas.LessonCompleteRequest, request: Request,
             db.add(progress)
 
         completed_list = list(progress.completed_lessons) if progress.completed_lessons else []
-        completed_list.append(content_id)
-        progress.completed_lessons = completed_list
+        if content_id not in completed_list:
+            completed_list.append(content_id)
+        progress.completed_lessons = completed_list.copy()
 
-        total_lessons = 0
-        try:
-            async with httpx.AsyncClient() as client:
-                course_detail = await client.get(f"{COURSE_SERVICE_URL}/courses/{course_id}")
-                if course_detail.status_code == 200:
-                    course_data = course_detail.json()
-                    modules = course_data.get("modules", [])
-                    for module in modules:
-                        total_lessons += len(module.get("content_list", []))
-                else:
-                    result = await db.execute(
-                        text("SELECT COUNT(*) FROM course_content WHERE module_id IN (SELECT id FROM course_modules WHERE course_id=:cid)"),
-                        {"cid": course_id}
-                    )
-                    total_lessons = result.scalar() or 0
-        except httpx.RequestError:
-            result = await db.execute(
-                text("SELECT COUNT(*) FROM course_content WHERE module_id IN (SELECT id FROM course_modules WHERE course_id=:cid)"),
-                {"cid": course_id}
-            )
-            total_lessons = result.scalar() or 0
+        # Подсчёт уроков из базы
+        result = await db.execute(
+            text("SELECT COUNT(*) FROM course_content WHERE module_id IN (SELECT id FROM course_modules WHERE course_id=:cid)"),
+            {"cid": course_id}
+        )
+        total_lessons = result.scalar() or 0
 
         completed_count = len(completed_list)
         progress.progress_percent = (completed_count / total_lessons * 100) if total_lessons > 0 else 0.0
         progress.last_activity = datetime.utcnow()
 
         await db.commit()
-        logger.info(f"Updated progress for user {user_id} in course {course_id}: {progress.progress_percent}% completed")
 
-        slug = str(course_id)
-        try:
-            async with httpx.AsyncClient() as client:
-                course_info = await client.get(f"{COURSE_SERVICE_URL}/courses/{course_id}")
-                if course_info.status_code == 200:
-                    slug = course_info.json().get("slug", str(course_id))
-        except Exception as e:
-            logger.error(f"Failed to get course slug for course {course_id}: {e}")
-
-        log_msg = f"Updated progress in course '{slug}': completed lessons {completed_count}"
+        # Лог активности, не критично, пропускаем ошибки
         log_payload = {
             "user_id": user_id,
-            "action": log_msg,
+            "action": f"Updated progress in course {course_id}: completed lessons {completed_count}",
             "related_object_type": "course_progress",
             "related_object_id": course_id
         }
-
         async with httpx.AsyncClient() as client:
             try:
                 await client.post(f"{ACTIVITY_SERVICE_URL}/activity/logs", json=log_payload)
-                logger.info(f"Activity log created for user {user_id} progress update")
-            except httpx.RequestError as e:
-                logger.error(f"Failed to post activity log: {e}")
+            except Exception:
+                pass
 
         return {"detail": "Lesson marked as completed", "progress_percent": float(progress.progress_percent)}
 
     except Exception as e:
         logger.error(f"Error in complete_lesson: {e}")
-        traceback.print_exc()
+        logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.post("/assignments/{assignment_id}/submit")
@@ -308,3 +284,72 @@ async def submit_assignment(assignment_id: int, data: schemas.AssignmentSubmitRe
         logger.error(f"Error in submit_assignment: {e}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="Internal server error")
+
+@router.post("/undo-complete-lesson")
+async def undo_complete_lesson(data: schemas.LessonCompleteRequest, request: Request, db: AsyncSession = Depends(db.get_db)):
+    try:
+        payload = await _get_token_payload(request.headers.get("authorization"))
+        user_id = payload.get("user_id")
+        course_id = data.course_id
+        content_id = data.content_id
+
+        # Проверка записи пользователя на курс
+        result = await db.execute(select(models.UserCourseEnrollment).filter_by(user_id=user_id, course_id=course_id))
+        enrollment = result.scalars().first()
+        if not enrollment:
+            raise HTTPException(status_code=403, detail="User is not enrolled in this course")
+
+        # Проверка, есть ли отметка о завершении урока
+        result = await db.execute(select(models.LessonCompletion).filter_by(user_id=user_id, content_id=content_id))
+        completion = result.scalars().first()
+        if not completion:
+            raise HTTPException(status_code=400, detail="Lesson is not marked as completed")
+        logger.info(f"Deleting completion record: {completion}")
+
+        # Удаляем отметку о завершении
+        await db.delete(completion)
+        await db.flush()  # Применяем удаление в текущей сессии
+
+        # Обновление прогресса
+        result = await db.execute(select(models.UserCourseProgress).filter_by(user_id=user_id, course_id=course_id))
+        progress = result.scalars().first()
+        if not progress:
+            raise HTTPException(status_code=404, detail="Progress record not found")
+
+        completed_list = list(progress.completed_lessons) if progress.completed_lessons else []
+        if content_id in completed_list:
+            completed_list.remove(content_id)
+        progress.completed_lessons = completed_list
+
+        # Подсчёт общего количества уроков
+        result = await db.execute(
+            text("SELECT COUNT(*) FROM course_content WHERE module_id IN (SELECT id FROM course_modules WHERE course_id=:cid)"),
+            {"cid": course_id}
+        )
+        total_lessons = result.scalar() or 0
+
+        completed_count = len(completed_list)
+        progress.progress_percent = (completed_count / total_lessons * 100) if total_lessons > 0 else 0.0
+        progress.last_activity = datetime.utcnow()
+
+        await db.commit()
+
+        # Лог активности (пропускаем ошибки)
+        log_payload = {
+            "user_id": user_id,
+            "action": f"Removed lesson completion in course {course_id}: lesson {content_id}",
+            "related_object_type": "course_progress",
+            "related_object_id": course_id
+        }
+        async with httpx.AsyncClient() as client:
+            try:
+                await client.post(f"{ACTIVITY_SERVICE_URL}/activity/logs", json=log_payload)
+            except Exception:
+                pass
+
+        return {"detail": "Lesson marked as not completed", "progress_percent": float(progress.progress_percent)}
+
+    except Exception as e:
+        logger.error(f"Error in undo_complete_lesson: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail="Internal server error") 

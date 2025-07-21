@@ -50,18 +50,18 @@ async def get_my_logs(request: Request, db: AsyncSession = Depends(db.get_db)):
     user_data = await _get_user_from_token(request.headers.get("authorization"))
     user_id = user_data["user_id"]
 
-    result = await db.execute(select(models.UserActivityLog).filter(models.UserActivityLog.user_id == user_id))
+    result = await db.execute(select(models.UserActivityLog).filter(models.UserActivityLog.user_id == user_id).order_by(models.UserActivityLog.timestamp.desc()))
     logs = result.scalars().all()
 
-    return [
-        {
-            "id": log.id,
-            "action": log.action,
-            "related_object_type": log.related_object_type,
-            "related_object_id": log.related_object_id,
-            "timestamp": log.timestamp
-        } for log in logs
-    ]
+    activity_by_date = {}
+    for log in logs:
+        day = log.timestamp.date().isoformat()
+        if day not in activity_by_date:
+            activity_by_date[day] = {"count": 0, "details": []}
+        activity_by_date[day]["count"] += 1
+        activity_by_date[day]["details"].append(log.action)
+
+    return activity_by_date
 
 # Q&A endpoints
 @qa_router.get("/questions")

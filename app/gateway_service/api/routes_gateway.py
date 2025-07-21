@@ -113,12 +113,18 @@ async def vote_answer(answer_id: int, request: Request):
 
 @router.get("/activity/logs")
 async def get_logs(request: Request):
-    return await _forward_async("GET", f"{ACTIVITY_SERVICE_URL}/api/activity/logs", request)
+    return await _forward_async("GET", f"{ACTIVITY_SERVICE_URL}/activity/logs", request)
 
 @router.post("/activity/logs")
 async def create_log(request: Request):
-    return await _forward_async("POST", f"{ACTIVITY_SERVICE_URL}/api/activity/logs", request)
+    return await _forward_async("POST", f"{ACTIVITY_SERVICE_URL}/activity/logs", request)
 
 @router.post("/assignments/{assignment_id}/submit")
 async def submit_assignment(assignment_id: int, request: Request):
     return await _forward_async("POST", f"{PROGRESS_SERVICE_URL}/api/progress/assignments/{assignment_id}/submit", request)
+
+@router.post("/progress/undo-complete-lesson")
+async def undo_complete_lesson(request: Request):
+    return await _forward_async("POST", f"{PROGRESS_SERVICE_URL}/api/progress/undo-complete-lesson", request)
+
+
