@@ -113,12 +113,55 @@ async def vote_answer(answer_id: int, request: Request):
 
 @router.get("/activity/logs")
 async def get_logs(request: Request):
-    return await _forward_async("GET", f"{ACTIVITY_SERVICE_URL}/api/activity/logs", request)
+    return await _forward_async("GET", f"{ACTIVITY_SERVICE_URL}/activity/logs", request)
 
 @router.post("/activity/logs")
 async def create_log(request: Request):
-    return await _forward_async("POST", f"{ACTIVITY_SERVICE_URL}/api/activity/logs", request)
+    return await _forward_async("POST", f"{ACTIVITY_SERVICE_URL}/activity/logs", request)
 
 @router.post("/assignments/{assignment_id}/submit")
 async def submit_assignment(assignment_id: int, request: Request):
     return await _forward_async("POST", f"{PROGRESS_SERVICE_URL}/api/progress/assignments/{assignment_id}/submit", request)
+
+@router.post("/progress/undo-complete-lesson")
+async def undo_complete_lesson(request: Request):
+    return await _forward_async("POST", f"{PROGRESS_SERVICE_URL}/api/progress/undo-complete-lesson", request)
+
+@router.get("/activity/streak")
+async def get_streak(request: Request):
+    return await _forward_async("GET", f"{ACTIVITY_SERVICE_URL}/activity/streak", request)
+
+@router.get("/activity/tasks/completed-count")
+async def proxy_completed_tasks_count(request: Request):
+    return await _forward_async("GET", f"{ACTIVITY_SERVICE_URL}/activity/tasks/completed-count", request)
+
+@router.get("/progress/task/completed-count")
+async def test_completed_count(request: Request):
+    auth = request.headers.get("authorization")
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(
+                f"{PROGRESS_SERVICE_URL}/api/progress/task/completed-count",
+                headers={"authorization": auth} if auth else None,
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+
+
+@router.post("/progress/enroll")
+async def proxy_enroll_course(request: Request):
+    # Проксируем запрос в progress_service /enroll
+    async with httpx.AsyncClient() as client:
+        headers = {"authorization": request.headers.get("authorization")}
+        body = await request.json()
+        try:
+            response = await client.post(f"{PROGRESS_SERVICE_URL}/enroll", json=body, headers=headers)
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(status_code=e.response.status_code, detail=e.response.text)

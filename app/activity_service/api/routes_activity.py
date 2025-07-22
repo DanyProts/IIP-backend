@@ -5,6 +5,8 @@ from datetime import datetime
 from .. import models, schemas, db
 import jwt
 from typing import List
+from datetime import datetime, timedelta
+from sqlalchemy import func
 
 activity_router = APIRouter(tags=["Activity Logs"])
 qa_router = APIRouter(tags=["Q&A"])
@@ -50,18 +52,18 @@ async def get_my_logs(request: Request, db: AsyncSession = Depends(db.get_db)):
     user_data = await _get_user_from_token(request.headers.get("authorization"))
     user_id = user_data["user_id"]
 
-    result = await db.execute(select(models.UserActivityLog).filter(models.UserActivityLog.user_id == user_id))
+    result = await db.execute(select(models.UserActivityLog).filter(models.UserActivityLog.user_id == user_id).order_by(models.UserActivityLog.timestamp.desc()))
     logs = result.scalars().all()
 
-    return [
-        {
-            "id": log.id,
-            "action": log.action,
-            "related_object_type": log.related_object_type,
-            "related_object_id": log.related_object_id,
-            "timestamp": log.timestamp
-        } for log in logs
-    ]
+    activity_by_date = {}
+    for log in logs:
+        day = log.timestamp.date().isoformat()
+        if day not in activity_by_date:
+            activity_by_date[day] = {"count": 0, "details": []}
+        activity_by_date[day]["count"] += 1
+        activity_by_date[day]["details"].append(log.action)
+
+    return activity_by_date
 
 # Q&A endpoints
 @qa_router.get("/questions")
@@ -175,3 +177,42 @@ async def vote_answer(answer_id: int, vote: schemas.VoteRequest, request: Reques
     await db.commit()
 
     return {"detail": f"{vote_type}voted answer {answer_id}"}
+
+@activity_router.get("/streak")
+async def get_task_streak(request: Request, db: AsyncSession = Depends(db.get_db)):
+    user_data = await _get_user_from_token(request.headers.get("authorization"))
+    user_id = user_data["user_id"]
+
+    # Получаем все логи пользователя, отсортированные по времени
+    result = await db.execute(
+        select(models.UserActivityLog)
+        .filter(models.UserActivityLog.user_id == user_id)
+        .order_by(models.UserActivityLog.timestamp.desc())
+    )
+    logs = result.scalars().all()
+
+    # Фильтруем только логи, связанные с выполнением задач/дз
+    task_logs = [log for log in logs if log.action and ("Submitted assignment" in log.action or "completed lessons" in log.action)]
+
+    # Уникальные даты с такими действиями, отсортированы по убыванию
+    dates = sorted({log.timestamp.date() for log in task_logs}, reverse=True)
+
+    # Функция вычисления стрика дней подряд
+    def current_streak(dates):
+        if not dates:
+            return 0
+        today = datetime.utcnow().date()
+        streak = 0
+        for i, date in enumerate(dates):
+            expected_date = today - timedelta(days=i)
+            if date == expected_date:
+                streak += 1
+            else:
+                break
+        return streak
+
+    streak_count = current_streak(dates)
+
+    return {"streak": streak_count}
+
+

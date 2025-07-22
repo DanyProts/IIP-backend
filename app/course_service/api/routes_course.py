@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from .. import models, schemas, db
-import jwt
 from sqlalchemy.orm import selectinload
 from typing import List
+from .. import models, schemas, db
+import jwt
 
 course_router = APIRouter(tags=["Courses"])
 content_router = APIRouter(tags=["Content"])
@@ -12,6 +12,7 @@ assignments_router = APIRouter(tags=["Assignments"])
 
 SECRET_KEY = "SUPER_SECRET_JWT_KEY"
 ALGORITHM = "HS256"
+
 
 async def _get_token_payload(token: str):
     try:
@@ -22,24 +23,38 @@ async def _get_token_payload(token: str):
     except jwt.PyJWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
+
 @course_router.get("/", response_model=List[schemas.CourseOut])
 async def list_courses(db: AsyncSession = Depends(db.get_db)):
-    result = await db.execute(select(models.Course).filter(models.Course.is_active == True))
+    result = await db.execute(
+        select(models.Course).filter(models.Course.is_active == True)
+    )
     courses = result.scalars().all()
     return courses
 
+
 @course_router.get("/{course_id_or_slug}", response_model=schemas.CourseOut)
 async def get_course_detail(course_id_or_slug: str, db: AsyncSession = Depends(db.get_db)):
-    course = None
+    query = select(models.Course).options(
+        selectinload(models.Course.modules).options(
+            selectinload(models.CourseModule.content_list)
+        ),
+        selectinload(models.Course.assignments),
+    )
     if course_id_or_slug.isdigit():
-        result = await db.execute(select(models.Course).filter(models.Course.id == int(course_id_or_slug)))
-        course = result.scalars().first()
+        query = query.filter(models.Course.id == int(course_id_or_slug))
     else:
-        result = await db.execute(select(models.Course).filter(models.Course.slug == course_id_or_slug))
-        course = result.scalars().first()
+        query = query.filter(models.Course.slug == course_id_or_slug)
+
+    result = await db.execute(query)
+    course = result.scalars().first()
+
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
+
     return course
+
+
 
 @course_router.post("/", response_model=schemas.CourseOut)
 async def create_course(course_data: schemas.CourseCreate, request: Request, db: AsyncSession = Depends(db.get_db)):
@@ -75,6 +90,7 @@ async def create_course(course_data: schemas.CourseCreate, request: Request, db:
     await db.refresh(new_course)
     return new_course
 
+
 @content_router.get("/{content_id}")
 async def get_content(content_id: int, db: AsyncSession = Depends(db.get_db)):
     result = await db.execute(
@@ -103,6 +119,7 @@ async def get_content(content_id: int, db: AsyncSession = Depends(db.get_db)):
         "module_id": content.module_id,
         "module_title": module_title,
     }
+
 
 @assignments_router.get("/{assignment_id}")
 async def get_assignment(assignment_id: int, db: AsyncSession = Depends(db.get_db)):
