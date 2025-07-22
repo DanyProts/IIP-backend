@@ -388,3 +388,76 @@ async def _get_token_payload(auth_header: str):
         logger.warning(f"Invalid token: {e}")
         raise HTTPException(status_code=401, detail="Invalid authentication token")
 
+@router.post("/enroll", response_model=schemas.ProgressOut)
+async def enroll_course(enroll_req: schemas.EnrollRequest, request: Request, db: AsyncSession = Depends(db.get_db)):
+    try:
+        payload = await _get_token_payload(request.headers.get("authorization"))
+        user_id = payload.get("user_id")
+        course_id = enroll_req.course_id
+
+        logger.info(f"User {user_id} enroll request for course {course_id}")
+
+        result = await db.execute(select(models.UserCourseEnrollment).filter_by(user_id=user_id, course_id=course_id))
+        existing = result.scalars().first()
+        if existing:
+            logger.warning(f"User {user_id} already enrolled in course {course_id}")
+            raise HTTPException(status_code=400, detail="User already enrolled in this course")
+
+        async with httpx.AsyncClient() as client:
+            res = await client.get(f"{COURSE_SERVICE_URL}/courses/{course_id}")
+            if res.status_code == 404:
+                logger.warning(f"Course service returned status {res.status_code} for course {course_id}")
+                raise HTTPException(status_code=404, detail="Course not found")
+            try:
+                course_json = res.json()
+            except Exception as e:
+                logger.error(f"Error decoding JSON from course service response: {e}")
+                raise HTTPException(status_code=502, detail="Invalid response from course service")
+
+        course_title = course_json.get("title", str(course_id))
+
+        enrollment = models.UserCourseEnrollment(
+            user_id=user_id,
+            course_id=course_id,
+            enrolled_at=datetime.utcnow()
+        )
+        progress = models.UserCourseProgress(
+            user_id=user_id,
+            course_id=course_id,
+            progress_percent=0.0,
+            last_activity=None,
+            completed_lessons=[],
+            total_time_minutes=0,
+            streak_days=0
+        )
+
+        db.add(enrollment)
+        db.add(progress)
+        await db.commit()
+        await db.refresh(progress)
+
+        course_title = res.json().get("title", str(course_id))
+        logger.info(f"User {user_id} enrolled in course '{course_title}' ({course_id})")
+
+        log_payload = {
+            "user_id": user_id,
+            "action": f'Started course "{course_title}"',
+            "related_object_type": "course",
+            "related_object_id": course_id
+        }
+
+        async with httpx.AsyncClient() as client:
+            try:
+                await client.post(f"{ACTIVITY_SERVICE_URL}/activity/logs", json=log_payload)
+                logger.info(f"Activity log created for user {user_id} enrolling course {course_id}")
+            except httpx.RequestError as e:
+                logger.error(f"Failed to post activity log: {e}")
+
+        return progress
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in enroll_course: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Internal server error")

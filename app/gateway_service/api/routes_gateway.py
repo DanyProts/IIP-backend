@@ -153,4 +153,15 @@ async def test_completed_count(request: Request):
 
 
 
-
+@router.post("/progress/enroll")
+async def proxy_enroll_course(request: Request):
+    # Проксируем запрос в progress_service /enroll
+    async with httpx.AsyncClient() as client:
+        headers = {"authorization": request.headers.get("authorization")}
+        body = await request.json()
+        try:
+            response = await client.post(f"{PROGRESS_SERVICE_URL}/enroll", json=body, headers=headers)
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
