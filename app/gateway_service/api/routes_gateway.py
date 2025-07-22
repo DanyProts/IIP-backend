@@ -165,3 +165,15 @@ async def proxy_enroll_course(request: Request):
             return response.json()
         except httpx.HTTPStatusError as e:
             raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+        
+@router.post("/auth/verify-email")
+async def verify_email(request: Request):
+    async with httpx.AsyncClient() as client:
+        headers = {"authorization": request.headers.get("authorization")} if request.headers.get("authorization") else {}
+        body = await request.json()
+        try:
+            response = await client.post(f"{USER_SERVICE_URL}/api/auth/verify-email", json=body, headers=headers)
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
