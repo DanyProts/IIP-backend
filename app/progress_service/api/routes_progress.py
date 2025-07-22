@@ -353,3 +353,38 @@ async def undo_complete_lesson(data: schemas.LessonCompleteRequest, request: Req
         logger.error(f"Error in undo_complete_lesson: {e}")
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail="Internal server error") 
+    
+    
+@router.get("/task/completed-count")
+async def get_completed_tasks_count(request: Request, db: AsyncSession = Depends(db.get_db)):
+    try:
+        payload = await _get_token_payload(request.headers.get("authorization"))
+        user_id = payload.get("user_id")
+
+        result = await db.execute(
+            select(models.LessonCompletion).filter(models.LessonCompletion.user_id == user_id)
+        )
+        completions = result.scalars().all()
+        count = len(completions)
+
+        return {"count": count}
+    except Exception as e:
+        logger.error(f"Error in get_completed_tasks_count: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+async def _get_token_payload(auth_header: str):
+    if not auth_header:
+        logger.warning("Authorization header missing")
+        raise HTTPException(status_code=401, detail="Authorization required")
+    token = auth_header.replace("Bearer ", "").replace("bearer ", "")
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        logger.info(f"Token decoded successfully for user_id={payload.get('user_id')}")
+        return payload
+    except jwt.ExpiredSignatureError:
+        logger.warning("Token has expired")
+        raise HTTPException(status_code=401, detail="Token has expired")
+    except jwt.PyJWTError as e:
+        logger.warning(f"Invalid token: {e}")
+        raise HTTPException(status_code=401, detail="Invalid authentication token")
+

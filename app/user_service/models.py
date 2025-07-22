@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, func
+from sqlalchemy import Column, Integer, String, Text, DateTime, func, Numeric, ARRAY, ForeignKey
+from datetime import datetime
 from .db import Base
 
 class User(Base):
@@ -11,3 +12,20 @@ class User(Base):
     avatar_url = Column(Text, nullable=True)
     join_date = Column(DateTime(timezone=False), server_default=func.now())
     last_visit = Column(DateTime(timezone=False), nullable=True)
+
+
+class UserCourseEnrollment(Base):
+    __tablename__ = "user_course_enrollment"
+    user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
+    course_id = Column(Integer, ForeignKey("courses.id"), primary_key=True)
+    enrolled_at = Column(DateTime, default=datetime.utcnow)
+
+class UserCourseProgress(Base):
+    __tablename__ = "user_course_progress"
+    user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
+    course_id = Column(Integer, ForeignKey("courses.id"), primary_key=True)
+    progress_percent = Column(Numeric(5, 2), default=0.0)
+    last_activity = Column(DateTime, nullable=True)
+    completed_lessons = Column(ARRAY(Integer), default=[])
+    total_time_minutes = Column(Integer, default=0)
+    streak_days = Column(Integer, default=0)

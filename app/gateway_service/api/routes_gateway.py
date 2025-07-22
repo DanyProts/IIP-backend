@@ -127,4 +127,30 @@ async def submit_assignment(assignment_id: int, request: Request):
 async def undo_complete_lesson(request: Request):
     return await _forward_async("POST", f"{PROGRESS_SERVICE_URL}/api/progress/undo-complete-lesson", request)
 
+@router.get("/activity/streak")
+async def get_streak(request: Request):
+    return await _forward_async("GET", f"{ACTIVITY_SERVICE_URL}/activity/streak", request)
+
+@router.get("/activity/tasks/completed-count")
+async def proxy_completed_tasks_count(request: Request):
+    return await _forward_async("GET", f"{ACTIVITY_SERVICE_URL}/activity/tasks/completed-count", request)
+
+@router.get("/progress/task/completed-count")
+async def test_completed_count(request: Request):
+    auth = request.headers.get("authorization")
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(
+                f"{PROGRESS_SERVICE_URL}/api/progress/task/completed-count",
+                headers={"authorization": auth} if auth else None,
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+
+
 
