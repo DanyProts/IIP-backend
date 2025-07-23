@@ -8,11 +8,23 @@ from email.message import EmailMessage
 from .. import models, schemas, security, db
 import jwt
 from fastapi.security import OAuth2PasswordBearer
-from dotenv import load_dotenv
 import os
 
-# Загружаем переменные окружения из .env файла
-load_dotenv()
+# --- Ручная загрузка переменных из .env файла ---
+def load_env_manual(path: str = 'C:/Users/Aushota/IIP-backend/.env'):
+    try:
+        with open(path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                key, val = line.split('=', 1)
+                os.environ[key] = val
+    except FileNotFoundError:
+        raise RuntimeError(f".env file not found at {path}")
+
+# Загрузка переменных окружения один раз при импорте модуля
+load_env_manual()
 
 EMAIL_ADDRESS = os.getenv("SMTP_EMAIL")
 EMAIL_PASSWORD = os.getenv("SMTP_PASSWORD")
