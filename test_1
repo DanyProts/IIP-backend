@@ -1,0 +1,40 @@
+import requests
+
+BASE_URL = "http://localhost:8006/api/code"
+TASK_ID = 2  # ID задачи Two Sum
+
+# Код пользователя: только функция с правильным именем
+user_code = """
+def reverse_integer(x):
+    sign = -1 if x < 0 else 1
+    x_abs = abs(x)
+    reversed_str = str(x_abs)[::-1]
+    reversed_int = int(reversed_str) * sign
+    if reversed_int < -2**31 or reversed_int > 2**31 - 1:
+        return 0
+    return reversed_int
+"""
+
+def run_code_on_task(task_id: int, code: str):
+    url = f"{BASE_URL}/tasks/{task_id}/run"
+    payload = {
+        "code": code,
+        "language": "python"
+    }
+    response = requests.post(url, json=payload)
+    response.raise_for_status()
+    return response.json()
+
+if __name__ == "__main__":
+    result = run_code_on_task(TASK_ID, user_code)
+    print(f"Success: {result['success']}")
+    print(f"Message: {result['message']}")
+    print("Test results:")
+    for r in result["results"]:
+        print(f"Input: {r['input']}")
+        print(f"Expected: {r['expected']}")
+        print(f"Output: {r['output']}")
+        print(f"Passed: {r['passed']}")
+        if r.get("error"):
+            print(f"Error: {r['error']}")
+        print("---")
