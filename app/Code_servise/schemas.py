@@ -1,72 +1,48 @@
 from pydantic import BaseModel
 from typing import List, Optional, Any
 
-# Модель теста
 class Test(BaseModel):
     input: str
-    expected: Any
-    output: Optional[str] = None
-    passed: Optional[bool] = None
-    error: Optional[str] = None
+    expected: str
 
 class TestResult(BaseModel):
-    input: dict
-    expected: Any
+    input: str  # JSON-строка с входными данными
+    expected: str
     output: Optional[Any]
     passed: bool
     error: Optional[str]
-# Запрос на выполнение кода с тестами
-class CodeRunRequest(BaseModel):
-    code: str
-    language: str
 
-# Запрос к песочнице
 class ExecuteRequest(BaseModel):
-    code: str
-    language: str
-    tests: List[Test]
+    code: str  # тело функции от пользователя (без строки def ...)
+    language: str  # например, 'python'
 
-# Ответ от песочницы
 class ExecuteResponse(BaseModel):
     results: List[TestResult]
     success: bool
     message: str
 
-# Модели задач и тестов для CRUD
-class TaskTestBase(BaseModel):
-    input_data: str
-    expected_output: str
-    is_active: Optional[bool] = True
-    order_index: Optional[int] = 0
-
-class TaskTestCreate(TaskTestBase):
-    pass
-
-class TaskTestOut(TaskTestBase):
+class TaskTestOut(BaseModel):
     id: int
     task_id: int
+    input_data: str
+    expected_output: str
+    is_active: bool
+    order_index: int
 
     class Config:
-        from_attributes = True  # или orm_mode = True для pydantic v1
+        orm_mode = True
 
-class TaskBase(BaseModel):
+class TaskOut(BaseModel):
+    id: int
     title: str
     description: str
-    difficulty: Optional[str] = "easy"
-
-class TaskCreate(TaskBase):
-    tests: List[TaskTestCreate]
-
-class TaskUpdate(TaskBase):
-    tests: Optional[List[TaskTestCreate]] = None
-
-class TaskOut(TaskBase):
-    id: int
-    tests: List[TaskTestOut] = []
+    difficulty: str
+    function_name: str
+    tests: List[TaskTestOut]
 
     class Config:
-        from_attributes = True  # или orm_mode = True
-        
+        orm_mode = True
+
 class CodeRunRequest(BaseModel):
-    code: str  # функция, которую пишет пользователь
-    language: str = "python"
+    code: str  # тело функции от пользователя (без строки def ...)
+    language: str
