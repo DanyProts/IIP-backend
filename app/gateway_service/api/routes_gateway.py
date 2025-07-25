@@ -7,6 +7,10 @@ USER_SERVICE_URL = "http://localhost:8001"
 COURSE_SERVICE_URL = "http://localhost:8002"
 PROGRESS_SERVICE_URL = "http://localhost:8003"
 ACTIVITY_SERVICE_URL = "http://localhost:8004"
+SUBPROCESS_SERVICE_URL ="http://localhost:8005"
+CODE_SERVICE_URL = "http://localhost:8006"
+
+
 
 async def _forward_async(method: str, url: str, request: Request) -> Response:
     headers = {}
@@ -177,3 +181,18 @@ async def verify_email(request: Request):
             return response.json()
         except httpx.HTTPStatusError as e:
             raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+
+CODE_SERVICE_URL = "http://localhost:8006"
+
+@router.get("/tasks")
+async def list_tasks(request: Request):
+    return await _forward_async("GET", f"{CODE_SERVICE_URL}/api/code/tasks", request)
+
+@router.get("/tasks/{task_id}")
+async def get_task(task_id: int, request: Request):
+    return await _forward_async("GET", f"{CODE_SERVICE_URL}/api/code/tasks/{task_id}", request)
+
+@router.post("/tasks/{task_id}/run")
+async def run_task_code(task_id: int, request: Request):
+    return await _forward_async("POST", f"{CODE_SERVICE_URL}/api/code/tasks/{task_id}/run", request)
+
