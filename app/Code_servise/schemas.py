@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 from typing import List, Optional, Any
+from datetime import datetime
 
 class Test(BaseModel):
     input: str
@@ -46,3 +47,30 @@ class TaskOut(BaseModel):
 class CodeRunRequest(BaseModel):
     code: str  # тело функции от пользователя (без строки def ...)
     language: str
+class SubmissionCreate(BaseModel):
+    user_id: int
+    task_id: int
+    code: str
+    language: str
+    status: str
+    output: Optional[Any] = None
+    error: Optional[str] = None
+    runtime: Optional[float] = None  # время выполнения в секундах (например)
+    memory: Optional[float] = None   # использование памяти в мегабайтах
+
+class SubmissionOut(BaseModel):
+    id: int
+    user_id: int
+    task_id: int
+    code: str
+    language: str
+    status: str
+    output: Optional[Any] = None
+    error: Optional[str] = None
+    runtime: Optional[float] = None
+    memory: Optional[float] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        orm_mode = True

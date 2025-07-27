@@ -182,17 +182,42 @@ async def verify_email(request: Request):
         except httpx.HTTPStatusError as e:
             raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
 
-CODE_SERVICE_URL = "http://localhost:8006"
 
 @router.get("/tasks")
 async def list_tasks(request: Request):
     return await _forward_async("GET", f"{CODE_SERVICE_URL}/api/code/tasks", request)
 
+@router.get("/tasks/solved")
+async def get_solved_tasks(request: Request):
+    print("Proxy: /tasks/solved called")
+    return await _forward_async("GET", f"{CODE_SERVICE_URL}/api/code/tasks/solved", request)
+
+@router.get("/tasks/{task_id}/solved")
+async def is_task_solved(task_id: int, request: Request):
+    return await _forward_async("GET", f"{CODE_SERVICE_URL}/api/code/tasks/{task_id}/solved", request)
+
 @router.get("/tasks/{task_id}")
 async def get_task(task_id: int, request: Request):
+    print(f"Proxy: /tasks/{task_id} called")
     return await _forward_async("GET", f"{CODE_SERVICE_URL}/api/code/tasks/{task_id}", request)
 
 @router.post("/tasks/{task_id}/run")
 async def run_task_code(task_id: int, request: Request):
     return await _forward_async("POST", f"{CODE_SERVICE_URL}/api/code/tasks/{task_id}/run", request)
 
+@router.get("/tasks/{task_id}/leaderboard")
+async def get_task_leaderboard(task_id: int, request: Request):
+    target_url = f"{CODE_SERVICE_URL}/api/code/tasks/{task_id}/leaderboard"
+    return await _forward_async("GET", target_url, request)
+
+@router.get("/favorites")
+async def get_favorites(request: Request):
+    return await _forward_async("GET", f"{CODE_SERVICE_URL}/api/code/favorites", request)
+
+@router.post("/favorites/{task_id}")
+async def add_favorite(task_id: int, request: Request):
+    return await _forward_async("POST", f"{CODE_SERVICE_URL}/api/code/favorites/{task_id}", request)
+
+@router.delete("/favorites/{task_id}")
+async def remove_favorite(task_id: int, request: Request):
+    return await _forward_async("DELETE", f"{CODE_SERVICE_URL}/api/code/favorites/{task_id}", request)

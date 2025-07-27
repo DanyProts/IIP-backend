@@ -7,6 +7,8 @@ import subprocess
 import tempfile
 import os
 import json
+import time
+import psutil  # pip install psutil
 
 app = FastAPI(title="Sandbox Service")
 
@@ -22,6 +24,8 @@ class TestResult(BaseModel):
     output: Optional[str]
     passed: bool
     error: Optional[str]
+    runtime: Optional[float]  # время в секундах
+    memory: Optional[float]   # память в мегабайтах
 
 
 class ExecuteRequest(BaseModel):
@@ -36,33 +40,67 @@ class ExecuteResponse(BaseModel):
     message: str
 
 
-def run_code_in_sandbox(code: str, input_json: str, timeout=5) -> (str, str):
+def run_code_in_sandbox(code: str, input_json: str, timeout=5) -> (str, str, float, float):
     """
     Запускает python-код в отдельном процессе,
     подаёт input_json на stdin,
-    возвращает (stdout, stderr)
+    возвращает (stdout, stderr, runtime_seconds, memory_megabytes)
     """
     with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding='utf-8') as f:
         f.write(code)
         filename = f.name
 
     try:
-        proc = subprocess.run(
-            ["python", filename],
-            input=input_json.encode(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=timeout,
-        )
-        stdout = proc.stdout.decode().strip()
-        stderr = proc.stderr.decode().strip()
-    except subprocess.TimeoutExpired:
-        stdout = ""
-        stderr = "Execution timed out"
-    finally:
-        os.remove(filename)
+        start_time = time.time()
 
-    return stdout, stderr
+        proc = subprocess.Popen(
+            ["python", filename],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+
+        try:
+            # До communicate попробуем получить psutil.Process
+            p = psutil.Process(proc.pid)
+        except Exception:
+            p = None
+
+        try:
+            stdout_bytes, stderr_bytes = proc.communicate(input=input_json.encode(), timeout=timeout)
+            returncode = proc.returncode
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            stdout_bytes, stderr_bytes = proc.communicate()
+            returncode = proc.returncode
+            stderr = "Execution timed out"
+            return "", stderr, timeout, None
+
+        end_time = time.time()
+        runtime = end_time - start_time
+
+        # Получаем пиковое использование памяти, если процесс ещё доступен
+        memory = None
+        if p is not None:
+            try:
+                # p.memory_info().rss - текущая память, пиковое - p.memory_info().peak_wset (Windows) или p.memory_info().peak_rss (Linux)
+                if hasattr(p.memory_info(), 'peak_wset'):  # Windows
+                    memory = p.memory_info().peak_wset / (1024 * 1024)
+                elif hasattr(p.memory_info(), 'rss'):  # Linux
+                    memory = p.memory_info().rss / (1024 * 1024)
+                else:
+                    memory = None
+            except Exception:
+                memory = None
+
+        stdout = stdout_bytes.decode().strip()
+        stderr = stderr_bytes.decode().strip()
+
+    finally:
+        if os.path.exists(filename):
+            os.remove(filename)
+
+    return stdout, stderr, runtime, memory
 
 
 def generate_function_template(func_name: str, args_json: str) -> str:
@@ -86,7 +124,6 @@ print(json.dumps(result))
     return template
 
 
-
 @app.post("/execute", response_model=ExecuteResponse)
 async def execute_code(request: ExecuteRequest):
     if request.language.lower() != "python":
@@ -94,7 +131,7 @@ async def execute_code(request: ExecuteRequest):
 
     results = []
     for test in request.tests:
-        stdout, stderr = run_code_in_sandbox(request.code, test.input)
+        stdout, stderr, runtime, memory = run_code_in_sandbox(request.code, test.input)
 
         if stderr:
             output = None
@@ -119,7 +156,9 @@ async def execute_code(request: ExecuteRequest):
             expected=test.expected,
             output=output,
             passed=passed,
-            error=error
+            error=error,
+            runtime=runtime,
+            memory=memory
         ))
 
     success = all(r.passed for r in results)

@@ -1,29 +1,17 @@
 import requests
 
 BASE_URL = "http://localhost:8006/api/code"
-TASK_ID = 4  # Пример задачи Two Sum
+TASK_ID = 1  # Пример задачи Two Sum
 
 # Тело функции, которое пишет пользователь (без def и заголовка)
 user_code_body = """
-tip = '(())]}'
-stack = []
-for i in s:
-    if i in tip and len(stack)!=0:
-        if i == ')' and stack[-1]=='(':
-            stack.pop(-1)
-        elif i == ']' and stack[-1]=='[':
-            stack.pop(-1)
-        elif i == '}' and stack[-1] == '{':
-            stack.pop(-1)
-        else:
-            return False
-    else:
-        stack.append(i)
-if len(stack) == 0:
-    return True
-else:
-    return False
-
+index = []
+for i in range(len(nums)-1):
+    for j in range(i+1, len(nums)):
+        if nums[i]+nums[j] == target:
+            index.append(i)
+            index.append(j)
+return index
 """
 
 def run_code_on_task(task_id: int, code_body: str):
